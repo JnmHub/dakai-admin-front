@@ -86,6 +86,8 @@ const menuOptions = [
     { label: '员工管理', key: '/employees', icon: renderIcon(PeopleOutline) },
     { label: '打卡点管理', key: '/points', icon: renderIcon(LocationOutline) },
     { label: '打卡记录', key: '/records', icon: renderIcon(ClipboardOutline) },
+    { label: '考勤规则', key: '/rules', icon: renderIcon(ClipboardOutline) },
+    { label: '考勤统计', key: '/attendance-stats', icon: renderIcon(ClipboardOutline) },
     { label: '管理员设置', key: '/admin/manage', icon: renderIcon(SettingsOutline) }
 ]
 

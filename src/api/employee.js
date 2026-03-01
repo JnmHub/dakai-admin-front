@@ -53,3 +53,10 @@ export function deleteEmployee(id) {
         method: 'delete'
     })
 }
+
+export function unbindWechat(id) {
+    return request({
+        url: `/admin/employees/${id}/unbind_wechat`, // 注意：请根据您实际的路由前缀调整，这里假设是 /admin/employees
+        method: 'patch'
+    })
+}

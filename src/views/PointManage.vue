@@ -3,7 +3,7 @@
         <div class="absolute left-4 top-4 z-10 flex flex-col gap-2 w-85 transition-all duration-300">
             <n-card size="small" class="shadow-md opacity-95">
                 <n-input-group>
-                    <n-input v-model:value="locationSearchQuery" placeholder="定位地址、大厦..." clearable :input-props="{ id: 'tipinput' }" @keyup.enter="handlePlaceSearch" />
+                    <n-input v-model:value="locationSearchQuery" placeholder="定位地址、大厦..." clearable id="tipinput" @keyup.enter="handlePlaceSearch" />
                     <n-button type="primary" @click="handlePlaceSearch">搜索</n-button>
                 </n-input-group>
             </n-card>
@@ -35,9 +35,14 @@
                     <n-scrollbar style="max-height: 350px">
                         <n-list hoverable clickable size="small">
                             <n-list-item v-for="point in filteredPoints" :key="point.id" @click="jumpToPoint(point)">
-                                <div class="flex flex-col">
+                                <div class="flex flex-col gap-1">
                                     <div class="text-xs font-bold text-gray-700 truncate">{{ point.title }}</div>
                                     <div class="text-[10px] text-gray-400 truncate">{{ point.address }}</div>
+                                    <div v-if="point.rule_name" class="flex">
+                                        <n-tag type="success" size="tiny" :bordered="false" round>
+                                            {{ point.rule_name }}
+                                        </n-tag>
+                                    </div>
                                 </div>
                                 <template #suffix>
                                     <n-tag :bordered="false" type="info" size="tiny" round> {{ point.employee_ids?.length || 0 }}人 </n-tag>
@@ -54,7 +59,7 @@
 
         <div id="point-map-container" class="w-full h-full bg-gray-100"></div>
 
-        <n-modal v-model:show="showModal" preset="card" :title="isEdit ? '编辑打卡点权限' : '新增打卡点'" class="w-240">
+        <n-modal v-model:show="showModal" preset="card" :title="isEdit ? '编辑打卡点' : '新增打卡点'" class="w-240">
             <div class="flex gap-8 h-120">
                 <div class="w-1/3 border-r pr-8 flex flex-col justify-between">
                     <n-form :model="formModel" label-placement="top">
@@ -66,6 +71,10 @@
                         </n-form-item>
                         <n-form-item label="允许打卡半径 (米)">
                             <n-input-number v-model:value="formModel.radius" :step="50" :min="100" :max="2000" class="w-full" />
+                        </n-form-item>
+
+                        <n-form-item label="关联考勤规则">
+                            <n-select v-model:value="formModel.rule_id" :options="ruleOptions" placeholder="选择考勤班次（可不选）" clearable />
                         </n-form-item>
                     </n-form>
 
@@ -83,11 +92,14 @@
             </div>
 
             <template #footer>
-                <n-space justify="end">
+                <div class="flex justify-between w-full">
                     <n-button v-if="isEdit" type="error" ghost @click="handleDelete">删除此点</n-button>
-                    <n-button @click="showModal = false">取消</n-button>
-                    <n-button type="primary" :loading="loading" @click="handleSave">确认保存配置</n-button>
-                </n-space>
+                    <div v-else></div>
+                    <n-space>
+                        <n-button @click="showModal = false">取消</n-button>
+                        <n-button type="primary" :loading="loading" @click="handleSave">确认保存配置</n-button>
+                    </n-space>
+                </div>
             </template>
         </n-modal>
     </div>
@@ -95,24 +107,27 @@
 
 <script setup>
 import { ref, reactive, onMounted, shallowRef, computed } from 'vue'
-import { useMessage } from 'naive-ui'
-import { LocationOutline, ChevronUpOutline, SearchOutline } from '@vicons/ionicons5' // 需要安装 @vicons/ionicons5
+import { useMessage, NIcon } from 'naive-ui'
+import { LocationOutline, ChevronUpOutline, SearchOutline } from '@vicons/ionicons5'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import EmployeePicker from '@/components/EmployeePicker.vue'
 import { getPoints, createPoint, deletePoint, updatePoint } from '@/api/point'
 import { getEmployees } from '@/api/employee'
+import { getRules } from '@/api/attendance' // ✅ 1. 引入规则接口
 
 const message = useMessage()
 const showModal = ref(false)
 const isEdit = ref(false)
 const loading = ref(false)
-const showPointList = ref(true) // 💡 列表折叠状态
-const locationSearchQuery = ref('') // 定位搜索
-const pointSearchQuery = ref('') // 💡 列表内部搜索
+const showPointList = ref(true)
+const locationSearchQuery = ref('')
+const pointSearchQuery = ref('')
 
 const mapInstance = shallowRef(null)
 const allEmployees = ref([])
-const allPoints = ref([]) // 💡 存储所有点位数据
+const allPoints = ref([])
+const ruleOptions = ref([]) // ✅ 2. 存储规则下拉选项
+
 let geocoder = null
 let contextMenu = null
 let placeSearch = null
@@ -125,19 +140,31 @@ const formModel = reactive({
     latitude: 0,
     longitude: 0,
     radius: 500,
-    employee_ids: []
+    employee_ids: [],
+    rule_id: null // ✅ 3. 新增 rule_id 字段
 })
 
-// 💡 计算属性：根据关键词搜索已有打卡点
+// 计算属性：过滤点位
 const filteredPoints = computed(() => {
     if (!pointSearchQuery.value) return allPoints.value
     const kw = pointSearchQuery.value.toLowerCase()
     return allPoints.value.filter(p => p.title.toLowerCase().includes(kw) || p.address.toLowerCase().includes(kw))
 })
 
-/**
- * 💡 列表联动：点击列表项跳转并打开编辑
- */
+// ✅ 4. 加载规则列表
+const loadRules = async () => {
+    try {
+        const res = await getRules()
+        // 转换成 Naive UI Select 格式
+        ruleOptions.value = res.map(item => ({
+            label: item.name,
+            value: item.id
+        }))
+    } catch (e) {
+        console.error('加载规则失败', e)
+    }
+}
+
 const jumpToPoint = point => {
     if (mapInstance.value) {
         mapInstance.value.setZoomAndCenter(17, [point.longitude, point.latitude])
@@ -145,9 +172,6 @@ const jumpToPoint = point => {
     }
 }
 
-/**
- * 1. 初始化地图
- */
 const initMap = async () => {
     window._AMapSecurityConfig = { securityJsCode: '1a167ea6fbd13fff6544a2b5d166da61' }
 
@@ -179,6 +203,7 @@ const initMap = async () => {
         let tempLngLat = null
         mapInstance.value.on('rightclick', e => {
             tempLngLat = e.lnglat
+            // @ts-ignore
             contextMenu.open(mapInstance.value, e.lnglat)
         })
         contextMenu.addItem('📍 在此新增打卡点', () => openAddMode(tempLngLat.getLng(), tempLngLat.getLat()), 0)
@@ -190,13 +215,11 @@ const initMap = async () => {
     }
 }
 
-/**
- * 2. 数据获取逻辑
- */
 const fetchAndMarkPoints = async () => {
     const res = await getPoints()
-    allPoints.value = Array.isArray(res) ? res : [] // 💡 同步更新列表数据
+    allPoints.value = Array.isArray(res.data) ? res.data : Array.isArray(res) ? res : []
 
+    // 清除旧标记
     markers.forEach(m => m.setMap(null))
     markers = []
 
@@ -205,6 +228,7 @@ const fetchAndMarkPoints = async () => {
         const lat = parseFloat(point.latitude)
         if (isNaN(lng) || isNaN(lat)) return
 
+        // 绘制标记
         const marker = new window.AMap.Marker({
             position: [lng, lat],
             map: mapInstance.value,
@@ -219,13 +243,11 @@ const fetchAndMarkPoints = async () => {
 }
 
 const fetchAllEmployees = async () => {
+    // 获取所有员工用于选择
     const res = await getEmployees({ skip: 0, limit: 1000 })
-    allEmployees.value = res.items || []
+    allEmployees.value = res.data?.items || res.items || []
 }
 
-/**
- * 3. 搜索与交互逻辑
- */
 const handlePlaceSearch = () => {
     if (!locationSearchQuery.value || !placeSearch) return
     placeSearch.search(locationSearchQuery.value, (status, result) => {
@@ -238,6 +260,7 @@ const handlePlaceSearch = () => {
 
 const openAddMode = (lng, lat) => {
     isEdit.value = false
+    // 重置表单
     Object.assign(formModel, {
         id: null,
         title: '',
@@ -245,9 +268,12 @@ const openAddMode = (lng, lat) => {
         latitude: lat,
         longitude: lng,
         radius: 500,
-        employee_ids: []
+        employee_ids: [],
+        rule_id: null // ✅ 重置
     })
     showModal.value = true
+
+    // 逆地理编码
     geocoder.getAddress([lng, lat], (status, result) => {
         if (status === 'complete' && result.regeocode) {
             formModel.address = result.regeocode.formattedAddress
@@ -262,7 +288,8 @@ const openEditMode = point => {
         ...point,
         longitude: Number(point.longitude),
         latitude: Number(point.latitude),
-        employee_ids: point.employee_ids || []
+        employee_ids: point.employee_ids ? point.employee_ids : point.employees ? point.employees.map(e => e.id) : [],
+        rule_id: point.rule_id || null // ✅ 回显规则ID
     })
     showModal.value = true
 }
@@ -271,30 +298,41 @@ const handleSave = async () => {
     if (!formModel.title) return message.error('请输入点位标题')
     loading.value = true
     try {
+        // 构造提交数据
+        const payload = { ...formModel }
+
         if (formModel.id) {
-            await updatePoint(formModel.id, formModel)
+            await updatePoint(formModel.id, payload)
             message.success('更新成功')
         } else {
-            await createPoint(formModel)
+            await createPoint(payload)
             message.success('创建成功')
         }
         showModal.value = false
         await fetchAndMarkPoints()
     } catch (err) {
         console.error('保存失败:', err)
+        // message.error 由 request.js 统一处理，这里可以不写
     } finally {
         loading.value = false
     }
 }
 
 const handleDelete = async () => {
-    await deletePoint(formModel.id)
-    message.success('已删除')
-    showModal.value = false
-    await fetchAndMarkPoints()
+    try {
+        await deletePoint(formModel.id)
+        message.success('已删除')
+        showModal.value = false
+        await fetchAndMarkPoints()
+    } catch (e) {
+        console.error(e)
+    }
 }
 
-onMounted(initMap)
+onMounted(() => {
+    initMap()
+    loadRules() // ✅ 同时加载规则
+})
 </script>
 
 <style scoped>
@@ -313,8 +351,6 @@ onMounted(initMap)
 :deep(.amap-menu-item) {
     padding: 12px 24px;
 }
-
-/* 💡 列表过渡动画 */
 .rotate-180 {
     transform: rotate(180deg);
 }

@@ -35,13 +35,38 @@
                 </div>
             </template>
         </n-modal>
+
+        <n-modal v-model:show="showTrajDateModal" preset="card" title="选择轨迹时间范围" class="w-96">
+            <div class="flex flex-col gap-4">
+                <n-alert type="info" :show-icon="false">
+                    请选择要查看 <strong>{{ currentTrajEmp?.name }}</strong> 的轨迹日期范围。
+                </n-alert>
+                <n-date-picker v-model:value="trajDateRange" type="daterange" clearable class="w-full" />
+            </div>
+            <template #footer>
+                <div class="flex justify-end gap-2">
+                    <n-button @click="showTrajDateModal = false">取消</n-button>
+                    <n-button type="primary" @click="confirmOpenDrawer">查看轨迹</n-button>
+                </div>
+            </template>
+        </n-modal>
+
+        <n-drawer v-model:show="showTrajDrawer" width="85%" placement="right">
+            <n-drawer-content :title="`${currentTrajEmp?.name} 的行动轨迹`" closable>
+                <div v-if="showTrajDrawer" class="h-full w-full">
+                    <TrajectoryMap :employee-id="currentTrajEmp?.id" :date-range="trajDateRange" />
+                </div>
+            </n-drawer-content>
+        </n-drawer>
     </div>
 </template>
 
 <script setup>
 import { h, ref, reactive, onMounted } from 'vue'
-import { useMessage, NButton, NSwitch, NSpace, NPopconfirm } from 'naive-ui'
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, resetEmployeePassword } from '@/api/employee'
+import { useMessage, NButton, NSwitch, NSpace, NPopconfirm, NDrawer, NDrawerContent, NDatePicker, NAlert, NModal } from 'naive-ui'
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, resetEmployeePassword, unbindWechat } from '@/api/employee'
+import TrajectoryMap from '@/components/TrajectoryMap.vue' // 🔥 引入地图组件
+
 const formRules = {
     name: [
         { required: true, message: '请输入员工姓名', trigger: 'blur' },
@@ -53,7 +78,6 @@ const formRules = {
     ],
     password: [
         {
-            // 只有在新增模式下（editId 为空）才强制要求密码
             required: true,
             validator: (rule, value) => {
                 if (!editId.value && !value) {
@@ -66,13 +90,18 @@ const formRules = {
     ]
 }
 
-// 2. 别忘了在模板中引用的 formRef 也需要定义
 const formRef = ref(null)
 const message = useMessage()
 const loading = ref(false)
 const tableData = ref([])
 const showAddModal = ref(false)
 const editId = ref(null)
+
+// --- 轨迹相关状态 ---
+const showTrajDateModal = ref(false) // 控制时间选择弹窗
+const showTrajDrawer = ref(false) // 控制地图抽屉
+const currentTrajEmp = ref(null) // 当前查看的员工对象
+const trajDateRange = ref(null) // 选中的时间范围
 
 // 1. 搜索逻辑
 const searchParams = reactive({
@@ -84,12 +113,13 @@ const searchParams = reactive({
 
 // 2. 表格列定义
 const columns = [
-    { title: 'ID', key: 'id', width: 80 },
-    { title: '姓名', key: 'name' },
-    { title: '账号', key: 'account' },
+    { title: 'ID', key: 'id', width: 60 },
+    { title: '姓名', key: 'name', width: 100 },
+    { title: '账号', key: 'account', width: 120 },
     {
         title: '状态',
         key: 'is_active',
+        width: 100,
         render(row) {
             return h(NSwitch, {
                 value: row.is_active,
@@ -98,18 +128,32 @@ const columns = [
         }
     },
     {
-        title: '微信绑定',
-        key: 'wechat_openid',
-        render(row) {
-            return row.wechat_openid ? '已绑定' : '未绑定'
-        }
-    },
-    {
         title: '操作',
         key: 'actions',
         render(row) {
             return h(NSpace, null, {
                 default: () => [
+                    // 🔥 新增：查看轨迹按钮
+                    h(
+                        NButton,
+                        {
+                            size: 'small',
+                            secondary: true,
+                            type: 'info',
+                            onClick: () => handleOpenTrajModal(row)
+                        },
+                        { default: () => '轨迹' }
+                    ),
+                    row.wechat_openid
+                        ? h(
+                              NPopconfirm,
+                              { onPositiveClick: () => handleUnbindWechat(row) },
+                              {
+                                  trigger: () => h(NButton, { size: 'small', quaternary: true, type: 'warning' }, { default: () => '解绑微信' }),
+                                  default: () => `确定要解绑 ${row.name} 的微信吗？`
+                              }
+                          )
+                        : null,
                     h(NButton, { size: 'small', quaternary: true, onClick: () => handleEdit(row) }, { default: () => '编辑' }),
                     h(NButton, { size: 'small', quaternary: true, type: 'warning', onClick: () => handleResetPwd(row) }, { default: () => '重置密码' }),
                     h(
@@ -117,7 +161,7 @@ const columns = [
                         { onPositiveClick: () => handleDelete(row) },
                         {
                             trigger: () => h(NButton, { size: 'small', quaternary: true, type: 'error' }, { default: () => '删除' }),
-                            default: () => '确定要删除该员工及其所有记录吗？'
+                            default: () => '确定要删除该员工吗？'
                         }
                     )
                 ]
@@ -126,7 +170,41 @@ const columns = [
     }
 ]
 
-// 3. 数据加载与分页
+// --- 轨迹交互逻辑 ---
+
+// 点击列表中的“轨迹”按钮
+const handleOpenTrajModal = row => {
+    currentTrajEmp.value = row
+    // 默认时间设为今天到今天
+    const startOfToday = new Date().setHours(0, 0, 0, 0)
+    const endOfToday = new Date().setHours(23, 59, 59, 999)
+    trajDateRange.value = [startOfToday, endOfToday]
+
+    showTrajDateModal.value = true
+}
+
+// 在模态框点“查看轨迹”确认
+const confirmOpenDrawer = () => {
+    if (!trajDateRange.value) {
+        message.warning('请选择日期范围')
+        return
+    }
+    showTrajDateModal.value = false // 关掉小窗
+    showTrajDrawer.value = true // 打开大抽屉
+}
+
+// ... 以下保持您原有的业务逻辑不变 ...
+const handleUnbindWechat = async row => {
+    try {
+        await unbindWechat(row.id)
+        message.success('解绑成功')
+        // 刷新列表，更新状态
+        fetchList()
+    } catch (e) {
+        // 错误已由拦截器处理，或在此打印
+        console.error(e)
+    }
+}
 const pagination = reactive({
     page: 1,
     pageSize: 10,
@@ -143,11 +221,10 @@ const pagination = reactive({
 })
 
 const handleSearch = () => {
-    pagination.page = 1 // 搜索时重置到第一页
+    pagination.page = 1
     fetchList()
 }
 
-// 3. 补充重置函数
 const resetSearch = () => {
     searchParams.name = ''
     searchParams.account = ''
@@ -155,7 +232,6 @@ const resetSearch = () => {
     fetchList()
 }
 
-// 4. 修正 fetchList 中的数据赋值 Bug
 const fetchList = async () => {
     loading.value = true
     try {
@@ -165,9 +241,7 @@ const fetchList = async () => {
             name: searchParams.name,
             account: searchParams.account
         })
-
-        // 注意：这里必须用 .value 赋值，而不是 .ref
-        tableData.value = data.items
+        tableData.value = data.items || data || []
     } catch (err) {
         console.error('获取列表失败:', err)
     } finally {
@@ -175,10 +249,9 @@ const fetchList = async () => {
     }
 }
 
-// 4. 业务操作逻辑
 const handleStatusChange = async (row, val) => {
     await updateEmployee(row.id, { is_active: val })
-    message.success(val ? '已启用账号' : '已禁用账号并强制下线')
+    message.success(val ? '已启用账号' : '已禁用账号')
     row.is_active = val
 }
 
@@ -204,10 +277,8 @@ const handleResetPwd = row => {
     }
 }
 
-// 5. 表单提交
 const formModel = reactive({ name: '', account: '', password: '' })
 const handleSave = async () => {
-    // 执行表单验证
     formRef.value?.validate(async errors => {
         if (!errors) {
             loading.value = true
@@ -222,12 +293,9 @@ const handleSave = async () => {
                 showAddModal.value = false
                 fetchList()
             } catch (err) {
-                // 错误已被 axios 拦截器处理
             } finally {
                 loading.value = false
             }
-        } else {
-            message.error('请填写完整信息')
         }
     })
 }

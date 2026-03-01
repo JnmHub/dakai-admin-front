@@ -26,6 +26,18 @@ const routes = [
                 meta: { title: '员工管理' }
             },
             {
+                path: 'rules', // 访问路径 /rules
+                name: 'RuleManage',
+                component: () => import('@/views/RuleManage.vue'),
+                meta: { title: '考勤规则' }
+            },
+            {
+                path: 'attendance-stats',
+                name: 'AttendanceStats',
+                component: () => import('@/views/AttendanceStats.vue'),
+                meta: { title: '考勤统计' }
+            },
+            {
                 path: 'points',
                 name: 'PointManage',
                 component: () => import('@/views/PointManage.vue'),

@@ -5,7 +5,7 @@ import request from '@/utils/request'
  */
 export function getAllRecords(params) {
     return request({
-        url: '/api/v1/checkin/all_records', // 对应后端即将实现的管理员接口
+        url: '/checkin/all_records', // 对应后端即将实现的管理员接口
         method: 'get',
         params
     })
