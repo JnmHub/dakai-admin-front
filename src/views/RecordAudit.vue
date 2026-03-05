@@ -18,9 +18,9 @@
         </n-card>
 
         <n-modal v-model:show="showPhoto" preset="card" title="查看打卡凭证" class="w-120">
-            <div class="flex flex-col items-center gap-4">
-                <n-image :src="currentPhotoUrl" class="w-full rounded-lg shadow-lg" />
-                <n-descriptions bordered label-placement="left" :column="1" size="small" class="w-full">
+            <div class="flex gap-4">
+                <n-image :src="currentPhotoUrl" class="rounded-lg shadow-lg" width="100%" />
+                <n-descriptions bordered label-placement="center" :column="1" size="small" class="w-full">
                     <n-descriptions-item label="详细地址">{{ currentRecord?.location_name }}</n-descriptions-item>
                 </n-descriptions>
             </div>
@@ -152,3 +152,8 @@ const handleSorterChange = sorter => {
 
 onMounted(fetchData)
 </script>
+<style scoped>
+img {
+    width: 100% !important;
+}
+</style>
